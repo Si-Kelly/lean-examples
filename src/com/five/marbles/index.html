@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>Marbles</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script type="module" src="../layout.js"></script>
+    <script type="module" src="marbles.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/planck@1.0.0-alpha.3/dist/planck.min.js"></script>
+
+    <link rel="stylesheet" href="../style.css">
+</head>
+
+<body>
+    <audio src="bounce6.wav" data-name="bounceSound" id="bounce-wav" preload="auto">
+        Your browser does not support the
+        <code>audio</code> element.
+    </audio>
+    <audio src="ready.wav" data-name="readySound" preload="auto"></audio>
+    <audio src="win.wav" data-name="winSound" preload="auto"></audio>
+    <audio src="lose.wav" data-name="loseSound" preload="auto"></audio>
+    <five-layout>
+        <div slot="page-title"></div>
+        <div slot="content">
+            <marbles-game></marbles-game>
+        </div>
+    </five-layout>
+</body>
+
+</html>

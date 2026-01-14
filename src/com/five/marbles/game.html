@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Marble run game</title>
+    <script src="https://cdn.jsdelivr.net/npm/planck@1.0.0-alpha.3/dist/planck.min.js"></script>
+
+    <script>
+        const pl = planck,
+            Vec2 = planck.Vec2,
+            RADIANS_TO_DEGREES = 57.2958;
+
+        const WAITING = 0,
+            BUILDING = 1,
+            PLAYING = 2,
+            PLAYING_READY = 3,
+            END_WIN = 4,
+            END_LOSE = 5;
+
+        const collisionThreshold = 0.1;
+
+        let gameObjects = [];
+
+        let world, svg, svgUtil, containerWidth, containerHeight, activeLevel, player, levels;
+        let levelEl, progressEls, startButtonEl, resetButtonEl, bounceSound, winSound, readySound, loseSound;
+        let drag;
+
+        let mode = WAITING,
+            level = 0;
+
+        window.addEventListener('load', function () {
+            svg = document.getElementsByTagName('svg')[0];
+            svgUtil = new SVGUtil(svg);
+            const viewbox = svgUtil.viewbox()
+            containerWidth = viewbox[2]
+            containerHeight = viewbox[3];
+
+            world = new planck.World(planck.Vec2(0, 10), {
+                sleep: true
+            })
+            world.on('remove-fixture', function (fixture) {
+                // no-op yet
+            });
+
+            world.on('post-solve', function (contact, oldManifold) {
+                if (isBuilding() || isPlaying()) {
+                    let worldManifold = contact.getWorldManifold();
+                    let bodyA = contact.getFixtureA().getBody();
+                    let bodyB = contact.getFixtureB().getBody();
+                    let point = worldManifold.points[0];
+                    let vA = bodyA.getLinearVelocityFromWorldPoint(point);
+                    let vB = bodyB.getLinearVelocityFromWorldPoint(point);
+                    let approachVelocity = Vec2.dot(vB.sub(vA), worldManifold.normal);
+                    if (approachVelocity > collisionThreshold) {
+                        const rate = lerp(1, 16, Math.random());
+                        bounceSound.playbackRate = rate;
+                        bounceSound.volume = clamp(approachVelocity / 3, 0, 1);
+                        try {
+                            bounceSound.play();
+                        } catch (error) { }
+                    }
+                }
+            });
+
+
+            startButtonEl = document.getElementById('start');
+            resetButtonEl = document.getElementById('reset');
+            levelEl = document.getElementById('level');
+            progressEls = Array.from(document.getElementById('progress').getElementsByTagName('rect'));
+            player = document.getElementById('player');
+            bounceSound = document.getElementById('bounce-wav');
+            winSound = document.getElementById('win-wav');
+            loseSound = document.getElementById('lose-wav');
+            readySound = document.getElementById('ready-wav');
+            levelContainerEl = document.getElementById('level-container');
+            nextEl = document.getElementById('next');
+            prevEl = document.getElementById('back');
+
+            levels = Array.from(svg.getElementsByClassName('level'));
+            levels.forEach(l => l.unlocked = false);
+
+            loadLevel(level);
+            time = 0;
+            next();
+
+        });
+
+        function loadLevel(levelNumber) {
+            if (activeLevel) {
+                unloadActiveLevel();
+            }
+            const level = levels[levelNumber];
+            if (!level.loaded) {
+                level.circles = level.getElementsByTagName('circle');
+                level.rects = level.getElementsByTagName('rect');
+                level.lines = level.getElementsByTagName('line');
+                level.minTime = level.dataset.minTime;
+                level.maxTime = level.dataset.maxTime;
+            }
+            gameObjects.push(circle(player, world));
+            for (let i = 0; i < level.circles.length; i++) {
+                gameObjects.push(circle(level.circles[i], world));
+            }
+            for (let i = 0; i < level.rects.length; i++) {
+                gameObjects.push(rect(level.rects[i], world));
+            }
+            for (let i = 0; i < level.lines.length; i++) {
+                gameObjects.push(line(level.lines[i], world));
+            }
+            gameObjects.forEach(svgEl => {
+                svgEl.body.userData = svgEl;
+                svgEl.bodyType = svgEl.body.getType();
+                if (!level.loaded) {
+                    svgEl.onmousedown = (e) => startDrag(svgEl);
+                    svgEl.ontouchstart = (e) => startDrag(svgEl);
+                }
+                backup(svgEl);
+            });
+            level.loaded = true;
+            level.unlocked = true;
+            activeLevel = level;
+            activeLevel.classList.toggle('active');
+            mode = BUILDING;
+        }
+
+        function unloadActiveLevel() {
+            gameObjects = [];
+            activeLevel.classList.toggle('active', false);
+            for (let b = world.getBodyList(); b; b = b.getNext()) {
+                world.destroyBody(b);
+            }
+        }
+
+        function circle(svgEl, world) {
+            var xya = SVGUtil.getXYA(svgEl.cx.baseVal.value, svgEl.cy.baseVal.value, svgEl);
+            svgEl.body = world.createBody({
+                allowSleep: true,
+                type: svgEl.dataset.type,
+                position: Vec2(xya.x, xya.y),
+                angle: xya.a / RADIANS_TO_DEGREES
+            });
+            svgEl.body.createFixture(pl.Circle(Vec2(0, 0), svgEl.r.baseVal.value), {
+                density: 1,
+                restitution: 0.6,
+                friction: 0.6
+            });
+            svgEl.setAttribute('cx', '0');
+            svgEl.setAttribute('cy', '0');
+            return svgEl;
+        }
+
+        function rect(svgEl, world) {
+            var width = svgEl.width.baseVal.value;
+            var height = svgEl.height.baseVal.value;
+            var xya = SVGUtil.getXYA(svgEl.x.baseVal.value, svgEl.y.baseVal.value, svgEl);
+            svgEl.body = world.createBody({
+                allowSleep: true,
+                type: svgEl.dataset.type,
+                position: Vec2(xya.x, xya.y),
+                angle: xya.a / RADIANS_TO_DEGREES
+            });
+            svgEl.body.createFixture(pl.Box(width / 2, height / 2, Vec2(width / 2, height / 2)), {
+                density: 1,
+                friction: 0.6
+            });
+            svgEl.setAttribute('x', '0');
+            svgEl.setAttribute('y', '0');
+            return svgEl;
+
+        }
+
+        function line(svgEl, world) {
+            var xya1 = SVGUtil.getXYA(svgEl.x1.baseVal.value, svgEl.y1.baseVal.value, svgEl);
+            var xya2 = SVGUtil.getXYA(svgEl.x2.baseVal.value, svgEl.y2.baseVal.value, svgEl);
+            svgEl.body = world.createBody({
+                type: svgEl.dataset.type,
+                allowSleep: true
+            });
+            svgEl.body.createFixture(pl.Edge(Vec2(xya1.x, xya1.y), Vec2(xya2.x, xya2.y)), 0.0);
+            svgEl.setAttribute('x', '0');
+            svgEl.setAttribute('y', '0');
+            return svgEl;
+        }
+
+        function lerp(x, y, a) {
+            return Math.round(x * (1 - a) + y * a);
+        }
+
+        function clamp(val, min = 0, max = 1) {
+            return Math.max(min, Math.min(max, val));
+        }
+
+        function next() {
+            world.step(1 / 60);
+            let awake = false,
+                win = false;
+            let p;
+            const max = progressEls.length;
+            const ready = time > activeLevel.minTime && time < activeLevel.maxTime;
+            if (ready && isPlayingNotReady()) {
+                try {
+                    readySound.play();
+                } catch (error) { }
+                mode = PLAYING_READY;
+            } else if (!ready && isPlayingReady()) {
+                mode = PLAYING;
+            }
+            const progress = lerp(0, max, time / activeLevel.maxTime);
+            const min = lerp(0, max, activeLevel.minTime / activeLevel.maxTime);
+
+            progressEls.forEach((el, i) => {
+                el.classList.toggle('red', i < min);
+                el.classList.toggle('green', i >= min);
+                el.classList.toggle('active', i == progress);
+            });
+
+            gameObjects.forEach(el => {
+                if (player.body.isAwake()) {
+                    awake = true;
+                }
+                p = el.body.getPosition();
+                if (el.body.isDynamic() && (p.y > containerHeight + 1 || p.y < -1 || p.x < -1 || p.x > containerWidth + 1)) {
+                    if (el === player) {
+                        awake = false;
+                        el.body.setAwake(false);
+                        if (ready) {
+                            win = true;
+                        }
+                    } else if (isBuilding()) {
+                        restore(el);
+                    }
+                }
+                el.setAttribute('transform', 'translate(' + p.x + ' ' + p.y + ') rotate(' + el.body.getAngle() * RADIANS_TO_DEGREES + ') ');
+                el.classList.toggle('static', el.body.isStatic());
+                el.classList.toggle('dynamic', el.body.isDynamic());
+                el.classList.toggle('kinematic', el.body.isKinematic());
+            });
+
+            player.style.display = isPlayingOrEnd() ? '' : 'none';
+            startButtonEl.style.display = isBuilding() ? '' : 'none';
+            prevEl.style.display = level > 0 ? '' : 'none';
+            nextEl.style.display = level < levels.length - 1 && levels[level + 1].unlocked ? '' : 'none';
+            levelEl.innerText = '' + (level + 1);
+            levelContainerEl.style.display = levels.reduce((agg, value) => value.unlocked ? ++agg : agg, 0) > 1 ? '' : 'none';
+            resetButtonEl.style.display = isPlayingOrEnd() ? '' : 'none';
+            document.body.classList.toggle('win', isEndWin());
+            document.body.classList.toggle('lose', isEndLose());
+            document.body.classList.toggle('build', isBuilding());
+            document.body.classList.toggle('ready', isPlayingReady());
+
+            if (isPlaying()) {
+                time += 1 / 60;
+                if (!awake) {
+                    end(win);
+                }
+            }
+
+            window.requestAnimationFrame(() => next());
+        }
+
+        function isPlaying() {
+            return mode === PLAYING || mode === PLAYING_READY;
+        }
+
+        function isPlayingNotReady() {
+            return mode === PLAYING;
+        }
+
+        function isPlayingReady() {
+            return mode === PLAYING_READY;
+        }
+
+        function isEnd() {
+            return isEndWin() || isEndLose();
+        }
+
+        function isEndWin() {
+            return mode === END_WIN;
+        }
+
+        function isEndLose() {
+            return mode === END_LOSE;
+        }
+
+        function isPlayingOrEnd() {
+            return isPlaying() || isEnd();
+        }
+
+        function isBuilding() {
+            return mode === BUILDING;
+        }
+
+        function moveLevel(dir) {
+            const n = level + dir;
+            if (n >= 0 && n < levels.length && levels[n].unlocked) {
+                level = n;
+                loadLevel(level);
+            }
+        }
+
+        function removeNode(el) {
+            activeLevel.removeChild(el);
+            world.destroyBody(el.body);
+            gameObjects.splice(gameObjects.indexOf(el), 1);
+        }
+
+        function play() {
+            time = 0;
+            backupAll();
+            player.body.setPosition(Vec2(containerWidth / 2, 0.2));
+            player.body.setLinearVelocity(Vec2(0, 0));
+            player.body.setAwake(true);
+            mode = PLAYING;
+        }
+
+        function backupAll() {
+            gameObjects.forEach(el => {
+                backup(el);
+            });
+        }
+
+        function backup(el) {
+            const p = el.body.getPosition();
+            el.backup = {
+                pos: p.clone(),
+                angle: el.body.getAngle()
+            };
+        }
+
+        function reset() {
+            time = 0;
+            restoreAll();
+            mode = BUILDING;
+        }
+
+        function restore(el) {
+            if (el.backup) {
+                el.body.setPosition(el.backup.pos.clone());
+                el.body.setAngle(el.backup.angle);
+                el.body.setLinearVelocity(Vec2(0, 0));
+                el.body.setType(el.bodyType + '');
+            }
+        }
+
+        function restoreAll() {
+            gameObjects.forEach(el => {
+                restore(el);
+            });
+        }
+
+        function end(win) {
+            mode = win ? END_WIN : END_LOSE;
+            try {
+                (win ? winSound : loseSound).play();
+            } catch (error) { }
+            setTimeout(() => {
+                if (win) {
+                    level++;
+                    loadLevel(level);
+                }
+                if (!isBuilding()) {
+                    reset();
+                }
+            }, 3000);
+        }
+
+        function startDrag(obj) {
+            if (isBuilding() && obj.body.getType() !== 'static') {
+                obj.body.setType('static');
+                drag = new Drag({
+                    next: (dxy) => {
+                        const pos = obj.body.getPosition();
+                        obj.body.setPosition(Vec2(dxy.x + pos.x, dxy.y + pos.y));
+                    },
+                    done: () => {
+                        obj.body.setType(obj.bodyType + '');
+                        obj.body.setLinearVelocity(Vec2(0, 0));
+                    }
+                });
+            }
+        }
+
+        function mouseMove(e) {
+            if (drag) {
+                var xy = e.changedTouches && e.changedTouches.length == 1 ?
+                    new XY(e.changedTouches[0].pageX, e.changedTouches[0].pageY) :
+                    new XY(e.screenX, e.screenY);
+                drag.nextXY(svgUtil.getSVGXY(xy));
+                e.preventDefault();
+            }
+        }
+
+        function endDrag(e) {
+            if (drag) {
+                drag.done();
+                drag = undefined;
+                e.stopPropagation();
+                e.preventDefault();
+            }
+        }
+
+        class SVGUtil {
+            constructor(svgEl) {
+                this.svgEl = svgEl;
+                this.svgPoint = this.svgEl.createSVGPoint();
+                this.inverseCTM = this.svgEl.getCTM().inverse();
+            }
+            viewbox() {
+                return this.svgEl.getAttribute('viewBox').split(' ').map(x => parseFloat(x))
+            }
+            getSVGXY(xy) {
+                if (!this.svgPoint) {
+                    return new XY(0, 0);
+                }
+                this.svgPoint.x = xy.x;
+                this.svgPoint.y = xy.y;
+                return new XY(this.svgPoint.matrixTransform(this.inverseCTM).x, this.svgPoint.matrixTransform(this.inverseCTM).y);
+            }
+            static getXYA(x, y, el) {
+                if (el.transform.baseVal.length == 0) {
+                    return new XYA(x, y, 0);
+                }
+                var transforms = el.transform.baseVal;
+                var a;
+
+                for (var transform of transforms) {
+                    if (transform.type == SVGTransform.SVG_TRANSFORM_TRANSLATE) {
+                        x = transform.matrix.e + x;
+                        y = transform.matrix.f + y;
+                    }
+                    if (transform.type == SVGTransform.SVG_TRANSFORM_ROTATE) {
+                        a = transform.angle;
+                    }
+                }
+                return new XYA(x, y, a);
+            }
+        }
+        class XY {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+            }
+            diff(xy) {
+                return new XY(this.x - xy.x, this.y - xy.y);
+            }
+            eq(xy) {
+                return xy.x === this.x && xy.y === this.y;
+            }
+        }
+        class XYA {
+            constructor(x, y, a) {
+                this.x = x;
+                this.y = y;
+                this.a = a;
+            }
+        }
+        class Drag {
+            constructor(events) {
+                this.events = events;
+                this.hasMoved = false;
+            }
+            done() {
+                this.events.done(this.totalDXY);
+            }
+            nextXY(xy) {
+                if (!this.firstXY) {
+                    this.firstXY = xy;
+                }
+                this.lastXY = this.thisXY;
+                this.thisXY = xy;
+                if (!this.firstXY.eq(this.thisXY)) {
+                    this.hasMoved = true;
+                }
+                this.events.next(this.dxy, this.thisXY);
+            }
+            get dxy() {
+                if (this.thisXY && this.lastXY) {
+                    return this.thisXY.diff(this.lastXY);
+                }
+                return new XY(0, 0);
+            }
+            get totalDXY() {
+                if (this.thisXY && this.firstXY) {
+                    return this.thisXY.diff(this.firstXY);
+                }
+                return new XY(0, 0);
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 1.8em;
+            background-color: #252424;
+            color: #00d9ff;
+        }
+
+        .container {
+            max-width: 450px;
+            margin: auto;
+        }
+
+        svg {
+            background-color: #1d4349;
+            height: 90%;
+            margin-top: 0.25em;
+        }
+
+        g.level {
+            display: none;
+        }
+
+        g.level.active {
+            display: initial;
+        }
+
+        .kinematic {
+            fill: #c93fec;
+        }
+
+        .dynamic {
+            fill: #b4ec3f;
+        }
+
+        #player.dynamic {
+            fill: #ff1e00;
+        }
+
+        .static {
+            fill: #00d9ff;
+        }
+
+        .border {
+            stroke: #00d9ff;
+            stroke-width: 0.05;
+        }
+
+        .win .border {
+            stroke: #51ff00;
+        }
+
+        .lose .border {
+            stroke: #ff3c00;
+        }
+
+        .ready #player {
+            fill: #51ff00;
+        }
+
+        .lose.ready #player {
+            fill: #ff3c00;
+        }
+
+        .build .border {
+            stroke: #002930;
+        }
+
+        button {
+            cursor: pointer;
+            font-size: 1em;
+            color: #008fa8;
+            border: 1px solid #015e6e;
+            background-color: #002930;
+        }
+
+        .controls {
+            width: 100%;
+            text-align: right;
+        }
+
+        .build button {
+            color: #00d9ff;
+            border: 1px solid #00d9ff;
+            background-color: #002930;
+        }
+
+        #progress rect.red {
+            fill: #2b0500;
+        }
+
+        #progress rect.red.active {
+            fill: #ff1e00;
+        }
+
+        #progress rect.green {
+            fill: #081a00;
+        }
+
+        #progress rect.green.active {
+            fill: #51ff00;
+        }
+
+        .lose #progress rect.green.active {
+            fill: #ff3c00;
+        }
+    </style>
+
+</head>
+
+<body onmousemove="mouseMove(event)" ontouchmove="mouseMove(event)" onmouseup="endDrag(event)" ontouchend="endDrag(event)">
+    <audio src="bounce6.wav" id="bounce-wav" preload="auto">
+        Your browser does not support the
+        <code>audio</code> element.
+    </audio>
+    <audio src="ready.wav" id="ready-wav" preload="auto"></audio>
+    <audio src="win.wav" id="win-wav" preload="auto"></audio>
+    <audio src="lose.wav" id="lose-wav" preload="auto"></audio>
+    <div class="container">
+        <div class="controls">
+            <span id="level-container">
+                <button onclick="moveLevel(-1)" id="back">&lt;</button>
+                <span id="level"></span>
+                <button onclick="moveLevel(1)" id="next">&gt;</button>
+            </span>
+
+            <button onclick="play()" id="start">Start</button>
+            <button onclick="reset()" id="reset">Reset</button>
+        </div>
+        <svg viewBox="0 0 4.5 8">
+            <g id="progress">
+                <rect width="0.05" height="0.2" x="0.2" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.27" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.34" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.41" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.48" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.55" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.62" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.69" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.76" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.83" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.9" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="0.97" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.04" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.11" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.18" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.25" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.32" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.39" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.46" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.53" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.6" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.67" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.74" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.81" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.88" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="1.95" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.02" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.09" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.16" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.23" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.3" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.37" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.44" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.51" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.58" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.65" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.72" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.79" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.86" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="2.93" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.07" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.14" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.21" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.28" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.35" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.42" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.49" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.56" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.63" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.7" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.77" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.84" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.91" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="3.98" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="4.05" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="4.12" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="4.19" y="0.2"></rect>
+                <rect width="0.05" height="0.2" x="4.26" y="0.2"></rect>
+            </g>
+            <g class="level" data-level="1" data-min-time="8" data-max-time="10">
+                <rect data-type="kinematic" width="1" height="1" x="0" y="0" class="kinematic" transform="translate(3.161024332046509 6.605589389801025) rotate(0) "></rect>
+                <rect data-type="kinematic" width="0.2" height="0.2" x="0" y="0" class="kinematic" transform="translate(1.276397466659546 3.311002731323242) rotate(0) "></rect>
+                <rect data-type="kinematic" width="0.2" height="0.2" x="0" y="0" class="kinematic" transform="translate(0.7965922951698303 3.2476954460144043) rotate(0) "></rect>
+                <rect data-type="kinematic" width="2" height="0.2" x="0" y="0" class="kinematic" transform="translate(1.3892576694488525 1.4494404792785645) rotate(0) "></rect>
+                <rect data-type="kinematic" width="2" height="0.2" x="0" y="0" class="kinematic" transform="translate(1.5572540760040283 4.847449779510498) rotate(0) "></rect>
+                <rect data-type="kinematic" width="1" height="1" x="0" y="0" class="kinematic" transform="translate(0.9846596717834473 6.949036598205566) rotate(0) "></rect>
+                <rect data-type="dynamic" width="0.2" height="0.2" x="0" y="0" class="dynamic" transform="translate(0.46195017945367123 2.5331506751260298) rotate(6.955854899368794) "></rect>
+                <rect data-type="dynamic" width="0.2" height="0.2" x="0" y="0" class="dynamic" transform="translate(2.3268561391881977 4.832449780017247) rotate(-90.00003216091525) "></rect>
+                <rect data-type="dynamic" width="0.2" height="0.2" x="0" y="0" class="dynamic" transform="translate(0.46643067954548695 2.5186160092900542) rotate(-83.02844253570288) "></rect>
+                <rect data-type="dynamic" width="0.2" height="0.2" x="0" y="0" class="dynamic" transform="translate(3.361684897317037 1.4347856932674998) rotate(179.3593378388447) "></rect>
+                <rect data-type="dynamic" width="1.5" height="0.2" x="0" y="0" class="dynamic" transform="translate(1.6998690396145395 1.2368630317430154) rotate(-8.333757728395177) "></rect>
+                <rect data-type="dynamic" width="0.2" height="0.2" x="0" y="0" class="dynamic" transform="translate(0.42098367668226205 2.946161303046576) rotate(-83.06532941346735) "></rect>
+                <rect data-type="dynamic" width="2" height="0.2" x="0" y="0" class="dynamic" transform="translate(2.179369195453365 3.376257814997912) rotate(-173.07465882317288) "></rect>
+                <circle data-type="dynamic" r="0.3" cx="0" cy="0" class="dynamic" transform="translate(2.864671230316162 4.537917137145996) rotate(-76.9476318359375) "></circle>
+
+                <line class="border static" data-type="static" x1="0" y1="0" x2="2" y2="0" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="2.5" y1="0" x2="4.5" y2="0" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="0" y1="0" x2="0" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="0" y1="8" x2="2" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="2.5" y1="8" x2="4.5" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="4.5" y1="0" x2="4.5" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+            </g>
+            <g class="level" data-level="2" data-min-time="10" data-max-time="11">
+                <rect data-type="dynamic" width="2" height="0.1" x="0" y="0" class="dynamic" transform="translate(2.478720405605702 7.548042638947742) rotate(0.027935327027039228) "></rect>
+                <rect data-type="dynamic" width="2" height="0.1" x="0" y="0" class="dynamic" transform="translate(2.475429750269154 7.661825934392508) rotate(0.02646832775485876) "></rect>
+                <rect data-type="dynamic" width="2" height="0.1" x="0" y="0" class="dynamic" transform="translate(2.478547206944667 7.774525724805122) rotate(0.022355461420090345) "></rect>
+                <rect data-type="dynamic" width="2" height="0.1" x="0" y="0" class="dynamic" transform="translate(2.4795166713848285 7.886342866097702) rotate(0.013415194441738635) "></rect>
+                <rect data-type="kinematic" width="0.2" height="0.2" x="0" y="0" class="kinematic" transform="translate(2.2646596431732178 4.029036521911621) rotate(0) "></rect>
+                <rect data-type="kinematic" width="0.2" height="0.2" x="0" y="0" class="kinematic" transform="translate(1.884659767150879 4.009036540985107) rotate(0) "></rect>
+                <rect data-type="kinematic" width="0.2" height="0.2" x="0" y="0" class="kinematic" transform="translate(1.9146597385406494 3.6190366744995117) rotate(0) "></rect>
+                <rect data-type="kinematic" width="0.2" height="0.2" x="0" y="0" class="kinematic" transform="translate(2.2646596431732178 3.599036693572998) rotate(0) "></rect>
+
+                <circle data-type="kinematic" r="0.2" cx="0" cy="0" class="kinematic" transform="translate(2.864670991897583 4.657917499542236) rotate(-76.9476318359375) "></circle>
+                <circle data-type="kinematic" r="0.2" cx="0" cy="0" class="kinematic" transform="translate(1.4846711158752441 4.627917289733887) rotate(-76.9476318359375) "></circle>
+                <circle data-type="kinematic" r="0.2" cx="0" cy="0" class="kinematic" transform="translate(1.5446710586547852 3.3879170417785645) rotate(-76.9476318359375) "></circle>
+                <circle data-type="kinematic" r="0.2" cx="0" cy="0" class="kinematic" transform="translate(2.8346712589263916 3.347916841506958) rotate(-76.9476318359375) "></circle>
+
+
+                <line class="border static" data-type="static" x1="0" y1="0" x2="2" y2="0" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="2.5" y1="0" x2="4.5" y2="0" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="0" y1="0" x2="0" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="0" y1="8" x2="2" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="2.5" y1="8" x2="4.5" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="4.5" y1="0" x2="4.5" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+            </g>
+            <g class="level" data-level="3" data-min-time="19" data-max-time="20">
+                <rect data-type="dynamic" width="0.5" height="0.5" x="0" y="0" class="dynamic" transform="translate(0.22658945667859903 7.485013742093112) rotate(-0.3529347929353176) "></rect>
+                <rect data-type="dynamic" width="0.5" height="0.5" x="0" y="0" class="dynamic" transform="translate(0.7664057029514485 7.484195126369665) rotate(0.09230617686605945) "></rect>
+                <rect data-type="dynamic" width="0.5" height="0.5" x="0" y="0" class="dynamic" transform="translate(1.7981091130507727 7.482785926586369) rotate(90.29364004082893) "></rect>
+                <rect data-type="dynamic" width="0.5" height="0.5" x="0" y="0" class="dynamic" transform="translate(3.111539217929867 6.982297046960223) rotate(-10.849958853237116) "></rect>
+                <rect data-type="dynamic" width="0.5" height="0.5" x="0" y="0" class="dynamic" transform="translate(2.9770694426350666 7.486019935422004) rotate(-0.01249272755304948) "></rect>
+                <rect data-type="dynamic" width="0.5" height="0.5" x="0" y="0" class="dynamic" transform="translate(3.494370259281215 7.483733362628291) rotate(-0.24834773639383212) "></rect>
+                <rect data-type="kinematic" width="0.5" height="0.5" x="0" y="0" class="kinematic" transform="translate(1.0963952541351318 4.651002407073975) rotate(0) "></rect>
+                <rect data-type="kinematic" width="0.275" height="0.275" x="0" y="0" class="kinematic" transform="translate(0.6765933632850647 4.967695236206055) rotate(0) "></rect>
+                <rect data-type="kinematic" width="0.2" height="0.2" x="0" y="0" class="kinematic" transform="translate(0.6865916848182678 4.66769552230835) rotate(0) "></rect>
+
+                <rect data-type="dynamic" width="3" height="0.2" x="0" y="0" class="dynamic" transform="translate(0.8987552022641399 7.274373386959027) rotate(-12.984063510256146) "></rect>
+                <rect data-type="dynamic" width="2.5" height="0.2" x="0" y="0" class="dynamic" transform="translate(1.1324805866671541 7.000424351863387) rotate(-12.957650737713784) "></rect>
+                <rect data-type="dynamic" width="2" height="0.2" x="0" y="0" class="dynamic" transform="translate(1.763790338021955 4.921983846817219) rotate(49.80692107445855) "></rect>
+
+                <line class="border static" data-type="static" x1="0" y1="0" x2="2" y2="0" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="2.5" y1="0" x2="4.5" y2="0" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="0" y1="0" x2="0" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="0" y1="8" x2="2" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="2.5" y1="8" x2="4.5" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+                <line class="border static" data-type="static" x1="4.5" y1="0" x2="4.5" y2="8" transform="translate(0 0) rotate(0) " x="0" y="0"></line>
+            </g>
+            <circle cx="4.25" cy="0.2" r="0.2" data-type="dynamic" id="player"></circle>
+        </svg>
+    </div>
+
+</body>
+
+</html>

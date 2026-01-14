@@ -1,0 +1,6 @@
+/.vscode
+/build
+/build.properties
+/build.xml
+/dist
+/jsconfig.json

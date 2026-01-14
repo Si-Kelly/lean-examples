@@ -1,0 +1,124 @@
+@import url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css");
+
+body {
+    font-family: Arial, sans-serif;
+    font-size: 1em;
+    margin: 0;
+    padding: 5% 0 0 5%;
+    background-color: #373f47;
+    color: #a39ba8;
+}
+
+footer {
+    width: 100%;
+    margin-top: 5em;
+    padding: 0.5em;
+    background-color: #303030;
+    color: #a39ba8;
+    text-align: center;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    color: #30bced;
+    font-family: monospace;
+}
+
+a,
+a:visited,
+a:active {
+    color: #a39ba8;
+    text-decoration: none;
+}
+
+p {
+    margin: 0.5em 0;
+}
+
+.button,
+button:not(:disabled) {
+    cursor: pointer;
+}
+
+.button:hover,
+button:not(:disabled):hover {
+    color: white;
+    background-color: #303030;
+}
+
+button.not-button,
+button.not-button:hover {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+
+.button .hint,
+button .hint {
+    font-size: 0.8em;
+    color: gray;
+}
+
+.bg.green {
+    background-color: #008000;
+}
+
+.fg.green {
+    color: #008000;
+}
+
+h1 {
+    font-size: 1.5em;
+    margin: 0.5em 0;
+}
+
+h2 {
+    font-size: 1.25em;
+    margin: 0.5em 0;
+}
+
+input,
+textarea,
+button,
+.button,
+select {
+    border: 1px solid lightslategray;
+    font-size: 1em;
+    background-color: #202020;
+    color: lightgray;
+    padding: 0.25em 0.5em;
+}
+
+input,
+textarea {
+    background-color: #202020;
+    color: white;
+    padding: 0.25em;
+}
+
+section {
+    margin-left: 2%;
+    margin-bottom: 1.5em;
+}
+
+.popup {
+    background-color: #303030;
+    padding: 0.5em;
+    border: 1px solid rgb(57, 57, 57);
+}
+
+.blank-icon {
+    visibility: hidden;
+}
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    padding: 0.5em;
+    gap: 0.5em;
+}
