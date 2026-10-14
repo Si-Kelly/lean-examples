@@ -47,7 +47,7 @@ button:not(:disabled) {
 .button:hover,
 button:not(:disabled):hover {
     color: white;
-    background-color: #303030;
+    background-color: #13313c;
 }
 
 button.not-button,
@@ -87,11 +87,11 @@ textarea,
 button,
 .button,
 select {
-    border: 1px solid lightslategray;
+    border: 1px solid #15536a;
     font-size: 1em;
     background-color: #202020;
-    color: lightgray;
-    padding: 0.25em 0.5em;
+    color: #30bced;
+    padding: 0.5em 1em;
 }
 
 input,

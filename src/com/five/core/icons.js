@@ -32,4 +32,6 @@ export default {
     task: { title: 'Right arrow', className: 'fa-solid fa-arrow-right' },
     create: { title: 'Create', className: 'fa-solid fa-plus' },
     navigateUp: { title: 'Navigate up', className: 'fa-solid fa-caret-up' },
+    save: { title: 'Save', className: 'fa-solid fa-floppy-disk' },
+    saveAs: { title: 'Save as', className: 'fa-regular fa-floppy-disk' },
 }

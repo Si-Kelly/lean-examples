@@ -3,6 +3,7 @@ import { AssetBrowser, Asset } from "./browser.js";
 import { Assets } from "./assets.js";
 import { Action } from "./action.js";
 import { Body, Segment, Shape, Path } from "./body.js";
+import SVGParser from "./parser.js";
 
 export default class SVGStudio extends BaseComponent {
     static observedAttributes = [];
@@ -14,52 +15,59 @@ export default class SVGStudio extends BaseComponent {
                         <five-icon key="create"></five-icon>
                         New model
                     </button>
+                    <button data-name="openModelButton">Open model</button>
                 </div>
                 <asset-browser asset-title="Models" asset-type="models" asset-path="models"></asset-browser>
+                <div style="display:none" data-name="tempEl"></div>
             </div>
         `);
     }
     connectedCallback() {
         super.connectedCallback();
         this.newModelButton.addEventListener('click', () => {
-            const name = window.prompt('Enter name for new model');
-            //handle cancel
-            if (!name) return;
-            const content = window.prompt('Enter SVG content');
-            //handle cancel
-            if (!content) return;
-
-            const body = this.parseBodySVG(content, name);
-            Assets.saveBody(body);
-            this.loadBody(body);
+            this.importModel();
+        });
+        this.openModelButton.addEventListener('click', () => {
+            this.openFile();
         });
         this.updateUI();
+    }
+    updateUI() { }
+    loadNewBody(body) {
+        Assets.saveBody(body);
+        this.loadBody(body);
     }
     loadBody(body) {
         window.location.href = `models/${body.key}`;
     }
-    updateUI() { }
-
-    parseBodySVG(svgStr, name) {
-        const body = new Body(name);
-        //parse svg string
-        const tempNode = document.createElement('div');
-        this.shadowRoot.appendChild(tempNode);
-        tempNode.innerHTML = svgStr;
-        let group;
-        const svgEl = tempNode.querySelector('svg');
-        if (svgEl) {
-            group = svgEl.querySelector(':scope > g');
-        } else {
-            group = tempNode.querySelector('g');
-        } if (!group) {
-            alert('No group found in SVG');
-            return;
-        }
-        body.rootSegment = this.parseGroupNode(group, body);
-        return body;
+    importModel() {
+        const svgStr = prompt('Enter svg code');
+        const name = prompt('Enter model name');
+        this.loadNewBody(SVGParser.parseBodySVG(svgStr, name));
     }
-    
+
+    async openFile() {
+        const [filehandle] = await window.showOpenFilePicker({
+            multiple: false,
+            types: [
+                {
+                    description: "SVG Model",
+                    accept: {
+                        "image/svg+xml": [".model.svg"],
+                    },
+                }
+            ]
+        });
+        this.filehandle = filehandle;
+        const file = await filehandle.getFile();
+        const svgContent = await file.text();
+        // const parser = new DOMParser( );
+        // const parsedSVG = parser.parseFromString(svgContent,'text/svg');
+        this.tempEl.innerHTML = svgContent;
+        const g = this.tempEl.querySelector(`g`);
+        this.loadNewBody(Body.fromSVG(g, file.name));
+    }
+
 
 
 }

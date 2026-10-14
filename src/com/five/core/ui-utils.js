@@ -1,8 +1,15 @@
+
+import { Segment } from '../svgstudio/body.js';
+
+const RADIANS_TO_DEGREES = 180 / Math.PI;
 export class SVGUtil {
     constructor(svgEl) {
         this.svgEl = svgEl;
         this.svgPoint = this.svgEl.createSVGPoint();
         this.inverseCTM = this.svgEl.getCTM().inverse();
+        this.svgWidth = this.svgEl.clientWidth;
+        const viewbox = this.viewbox();
+        this.screenRatio = this.svgWidth / viewbox[2];
     }
     viewbox() {
         return this.svgEl.getAttribute('viewBox').split(' ').map(x => parseFloat(x))
@@ -14,6 +21,10 @@ export class SVGUtil {
         this.svgPoint.x = xy.x;
         this.svgPoint.y = xy.y;
         return new XY(this.svgPoint.matrixTransform(this.inverseCTM).x, this.svgPoint.matrixTransform(this.inverseCTM).y);
+    }
+    getScreenRatio() {
+        const viewbox = this.viewbox();
+        return this.svgWidth / viewbox[2];
     }
     static getElementXY(xy, el, svgEl) {
         const svgPoint = svgEl.createSVGPoint();
@@ -83,7 +94,6 @@ export class SVGUtil {
         }
         return angleDegrees;
     }
-
 }
 export class Matrix {
     constructor(a, b, c, d, e, f) {
@@ -155,9 +165,19 @@ export class XY {
         this.x = x;
         this.y = y;
     }
+    /**
+     * 
+     * @param {{x:number, y:number}} xy 
+     * @returns 
+     */
     static of(xy) {
         return new XY(xy.x, xy.y);
     }
+    /**
+     * 
+     * @param {XY} xy 
+     * @returns {XY} The difference between this and xy
+     */
     diff(xy) {
         return this.subtract(xy);
     }
@@ -207,12 +227,39 @@ export class XYA {
     }
 }
 export class Drag {
-    constructor(events) {
+
+    /**
+     * @type {XY}
+     */
+    thisXY = null;
+    /**
+     * @type {XY}
+     */
+    firstXY = null;
+    /**
+     * @type {XY}
+     */
+    lastXY = null;
+
+    /**
+     * 
+     * @param {{done:()=>{},next:(dxy:XY, xy:XY)=>{},stop:()=>{}}} events 
+     * @param {*} type 
+     * @param {*} delay 
+     */
+    constructor(events, type, delay) {
+        this.type = type;
         this.events = events;
         this.hasMoved = false;
+        this.delay = delay;
     }
     done() {
         this.events.done(this.totalDXY);
+    }
+    stop() {
+        if (this.events.stop) {
+            this.events.stop();
+        }
     }
     nextXY(xy) {
         if (!this.firstXY) {
@@ -223,7 +270,13 @@ export class Drag {
         if (!this.firstXY.eq(this.thisXY)) {
             this.hasMoved = true;
         }
-        this.events.next(this.dxy, this.thisXY);
+        if (this.delay) {
+            this.debounce(() => {
+                this.events.next(this.dxy, this.thisXY);
+            }, this.delay)();
+        } else {
+            this.events.next(this.dxy, this.thisXY);
+        }
     }
     get dxy() {
         if (this.thisXY && this.lastXY) {
@@ -236,6 +289,28 @@ export class Drag {
             return this.thisXY.diff(this.firstXY);
         }
         return new XY(0, 0);
+    }
+    static debounce(callback, wait) {
+        let timeoutId = null;
+        return (...args) => {
+            window.clearTimeout(timeoutId);
+            timeoutId = window.setTimeout(() => {
+                callback.apply(null, args);
+            }, wait);
+        };
+    }
+    static throttle(cb, delay = 250) {
+        let shouldWait = false
+
+        return (...args) => {
+            if (shouldWait) return
+
+            cb(...args)
+            shouldWait = true
+            setTimeout(() => {
+                shouldWait = false
+            }, delay)
+        }
     }
 }
 export class ImageContext {
@@ -316,7 +391,213 @@ export class AnimationUtil {
     static lerp(start, end, t) {
         return start + (end - start) * t;
     }
+    static lerpA(start, end, t) {
+        let CS = (1 - t) * Math.cos(start) + t * Math.cos(end);
+        let SN = (1 - t) * Math.sin(start) + t * Math.sin(end);
+        return Math.atan2(SN, CS);
+    }
     static clamp(val, min, max) {
         return Math.min(Math.max(val, min), max);
+    }
+    static getShortestRotationDirection(startAngle, endAngle) {
+        // Convert radians to degrees for calculation
+        let startDeg = startAngle * G2D;
+        let endDeg = endAngle * G2D;
+        let difference = endDeg - startDeg;
+        difference = ((difference + 180) % 360) - 180;
+        return difference >= 0 ? 1 : -1;
+    }
+}
+
+export class PlankSVG {
+    static circle(svgEl, world) {
+        var xya = SVGUtil.getXYA(svgEl.cx.baseVal.value, svgEl.cy.baseVal.value, svgEl);
+        svgEl.body = world.createBody({
+            allowSleep: true,
+            type: svgEl.dataset.type,
+            position: Vec2(xya.x, xya.y),
+            angle: xya.a / RADIANS_TO_DEGREES
+        });
+        svgEl.body.createFixture(pl.Circle(Vec2(0, 0), svgEl.r.baseVal.value), {
+            density: 1,
+            restitution: 0.6,
+            friction: 0.6
+        });
+        svgEl.setAttribute('cx', '0');
+        svgEl.setAttribute('cy', '0');
+        return svgEl;
+    }
+
+    static rect(svgEl, world) {
+        var width = svgEl.width.baseVal.value;
+        var height = svgEl.height.baseVal.value;
+        var xya = SVGUtil.getXYA(svgEl.x.baseVal.value, svgEl.y.baseVal.value, svgEl);
+        svgEl.body = world.createBody({
+            allowSleep: true,
+            type: svgEl.dataset.type,
+            position: Vec2(xya.x, xya.y),
+            angle: xya.a / RADIANS_TO_DEGREES
+        });
+        svgEl.body.createFixture(pl.Box(width / 2, height / 2, Vec2(width / 2, height / 2)), {
+            density: 1,
+            friction: 0.6
+        });
+        svgEl.setAttribute('x', '0');
+        svgEl.setAttribute('y', '0');
+        return svgEl;
+
+    }
+
+    static line(svgEl, world) {
+        var xya1 = SVGUtil.getXYA(svgEl.x1.baseVal.value, svgEl.y1.baseVal.value, svgEl);
+        var xya2 = SVGUtil.getXYA(svgEl.x2.baseVal.value, svgEl.y2.baseVal.value, svgEl);
+        svgEl.body = world.createBody({
+            type: svgEl.dataset.type,
+            allowSleep: true
+        });
+        svgEl.body.createFixture(pl.Edge(Vec2(xya1.x, xya1.y), Vec2(xya2.x, xya2.y)), 0.0);
+        svgEl.setAttribute('x', '0');
+        svgEl.setAttribute('y', '0');
+        return svgEl;
+    }
+    /**
+     * 
+     * @param {SVGPathElement} svgEl - Must be a closed path
+     * 
+     * @param {World} world 
+     */
+    static shape(svgEl, world) {
+        const xya = SVGUtil.getXYA(svgEl.x.baseVal.value, svgEl.y.baseVal.value, svgEl);
+        svgEl.body = world.createBody({
+            type: svgEl.dataset.type,
+            position: Vec2(xya.x, xya.y),
+            angle: xya.a / RADIANS_TO_DEGREES,
+            allowSleep: true
+        });
+        const vertices = [];
+        const pathLength = svgEl.getTotalLength();
+        const maxVertices = 8;
+        const numPoints = Math.min(Math.ceil(pathLength / 10), maxVertices);
+
+        if (numPoints < 3) {
+            throw new Error('Not enough vertices to form a shape');
+        }
+        if (numPoints === 3) {
+            //triangle, just get the 3 points
+            for (let i = 0; i < 3; i++) {
+                const point = svgEl.getPointAtLength((i / 3) * pathLength);
+                vertices.push(Vec2(point.x, point.y));
+            }
+            svgEl.body.createFixture(pl.Polygon(vertices), {
+                density: 1,
+                friction: 0.6
+            });
+            return;
+        }
+
+        for (let i = 0; i <= numPoints; i++) {
+            const point = svgEl.getPointAtLength((i / numPoints) * pathLength);
+            vertices.push(Vec2(point.x, point.y));
+        }
+        //ensure shape is convex
+        //use Andrew's monotone chain algorithm for convex hull
+        vertices.sort((a, b) => a.x - b.x || a.y - b.y);
+        const lower = [];
+        // Build lower hull
+        const cross = this.cross;
+        for (let v of vertices) {
+            while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], v) <= 0) {
+                lower.pop();
+            }
+            lower.push(v);
+        }
+        // Build upper hull 
+        const upper = [];
+        for (let i = vertices.length - 1; i >= 0; i--) {
+            const v = vertices[i];
+            while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], v) <= 0) {
+                upper.pop();
+            }
+            upper.push(v);
+        }
+        // Remove the last point of each half because it's repeated at the beginning of the other half
+        // Combine lower and upper hull to get the full convex hull
+        //throw error if not enough vertices to form a shape
+        if (lower.length + upper.length - 2 < 3) {
+            throw new Error('Not enough vertices to form a shape');
+        }
+        vertices.length = 0;
+        for (let i = 0; i < lower.length - 1; i++) {
+            vertices.push(lower[i]);
+        }
+        for (let i = 0; i < upper.length - 1; i++) {
+            vertices.push(upper[i]);
+        }
+
+        svgEl.body.createFixture(pl.Polygon(vertices), {
+            density: 1,
+            friction: 0.6
+        });
+    }
+    static cross(o, a, b) {
+        return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    }
+    static lineFromPath(svgEl, world) {
+        var pathLength = svgEl.getTotalLength();
+        var numSegments = Math.ceil(pathLength / 10);
+        var points = [];
+        for (var i = 0; i <= numSegments; i++) {
+            var point = svgEl.getPointAtLength((i / numSegments) * pathLength);
+            points.push(Vec2(point.x, point.y));
+        }
+        svgEl.body = world.createBody({
+            type: svgEl.dataset.type,
+            allowSleep: true
+        });
+        for (var i = 0; i < points.length - 1; i++) {
+            svgEl.body.createFixture(pl.Edge(points[i], points[i + 1]), 0.0);
+        }
+        return svgEl;
+    }
+    static isShapeClosed(svgEl) {
+        const pathLength = svgEl.getTotalLength();
+        const startPoint = svgEl.getPointAtLength(0);
+        const endPoint = svgEl.getPointAtLength(pathLength);
+        const distance = Math.sqrt(Math.pow(endPoint.x - startPoint.x, 2) + Math.pow(endPoint.y - startPoint.y, 2));
+        return distance < 1; //consider closed if start and end points are within 1 unit
+    }
+    static createBody(g) {
+
+    }
+    /**
+     * 
+     * @param {SVGElement} svgEl 
+     * @param {Segment} rootSegment 
+     * @param {World} world 
+     * @returns 
+     */
+    static createAll(svgEl, world) {
+        const gameObjects = [];
+        svgEl.getElementsByTagName('circle').forEach(c => {
+            gameObjects.push(circle(c, world));
+        });
+        svgEl.getElementsByTagName('rect').forEach(r => {
+            gameObjects.push(rect(r, world));
+        });
+        svgEl.getElementsByTagName('line').forEach(l => {
+            gameObjects.push(line(l, world));
+        });
+        svgEl.getElementsByTagName('path').forEach(p => {
+            if (this.isShapeClosed(p)) {
+                gameObjects.push(shape(p, world));
+            } else {
+                gameObjects.push(lineFromPath(p, world));
+            }
+        });
+        gameObjects.forEach(obj => {
+            obj.body.userData = obj;
+            obj.bodyType = obj.body.getType();
+        });
+        return gameObjects;
     }
 }

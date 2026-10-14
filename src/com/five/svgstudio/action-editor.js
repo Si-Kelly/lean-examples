@@ -1,13 +1,13 @@
 import BaseComponent from "../core/base-component.js";
 import { ImageContext, Drag, XY } from "../core/ui-utils.js";
-import './editor.js';
+import './frame-editor.js';
 import { Action } from './action.js';
 import { NONE, MOVE_IMAGE, RESIZE_IMAGE, ROTATE_IMAGE } from "./image-toolbar.js";
 import { Assets } from "./assets.js";
 import FrameNav from "./frame-nav.js";
 import Timeline from "./timeline.js";
 import ImageToolbar from "./image-toolbar.js";
-import Editor from "./editor.js";
+import FrameEditor from "./frame-editor.js";
 
 const IMAGE_DROP_OVER = 2, ANIMATE = 3, PREVIEW = 5;
 
@@ -62,7 +62,8 @@ export default class ActionEditor extends BaseComponent {
 
                 }
                 .tabs button.selected, .tabs button.selected:hover{
-                        background: #008000;
+                        background: #00756b;
+                        color: white;
                 }
                 .image-drop-target{
                     position: absolute;
@@ -82,7 +83,6 @@ export default class ActionEditor extends BaseComponent {
                     width: 100%;
                     height: 500px;
                     background: black;
-                    border: 1px solid white;
                     display: flex;
                     justify-content: center;
                     align-items: center;
@@ -117,10 +117,6 @@ export default class ActionEditor extends BaseComponent {
                                 <button data-name="duplicateFrameButton">
                                     <five-icon key="duplicate"></five-icon>
                                     Duplicate frame
-                                </button>
-                                <button data-name="importModelButton">
-                                    <five-icon key="import"></five-icon>
-                                    Import model
                                 </button>
                                 <button data-name="importImagesButton">
                                     <five-icon key="import"></five-icon>
@@ -173,7 +169,7 @@ export default class ActionEditor extends BaseComponent {
             // this.newAction('walk', this.body.key);
         }
         if (this.action && this.body) {
-            this.setData({action: this.action, body: this.body});
+            this.setData({ action: this.action, body: this.body });
             this.setCurrentFrame(0);
         }
         this.additiveCB.addEventListener('change', (e) => {
@@ -183,7 +179,6 @@ export default class ActionEditor extends BaseComponent {
         this.addFrameButton.addEventListener('click', () => this.addFrame());
         this.deleteFrameButton.addEventListener('click', () => this.deleteFrame());
         this.duplicateFrameButton.addEventListener('click', () => this.duplicateFrame());
-        this.importModelButton.addEventListener('click', () => this.importModel());
         this.importImagesButton.addEventListener('click', () => this.importImages());
         this.animateModeButton.addEventListener('click', () => {
             this.setMode(ANIMATE);
@@ -280,6 +275,10 @@ export default class ActionEditor extends BaseComponent {
         });
         this.editor.addEventListener('selectionChanged', (e) => {
             this.updateUI();
+        });
+        this.timelineNav.addEventListener('scrubToTime', (e) => {
+            const time = e.detail;
+            this.scrubToTime(time);
         });
         this.setMode(this.mode);
         this.updateUI();
@@ -408,7 +407,7 @@ export default class ActionEditor extends BaseComponent {
         reader.readAsDataURL(file);
     }
     setAction(action) {
-        this.setData({action,body: this.body});
+        this.setData({ action, body: this.body });
         this.setCurrentFrame(0);
     }
     setBody(body) {
@@ -420,7 +419,7 @@ export default class ActionEditor extends BaseComponent {
     }
     setData({ action, body }) {
         this.body = body;
-        this.action = action;   
+        this.action = action;
         this.editor.setData({ action, body });
         this.frameNav.setData({ action, body });
         this.timelineNav.setData({ action, body });
@@ -447,8 +446,17 @@ export default class ActionEditor extends BaseComponent {
             this.currentFrame = frame;
             this.editor.setCurrentFrame(frame);
             this.frameNav.setCurrentFrame(frame);
+            this.timelineNav.setCurrentFrame(frame);
             this.updateUI();
         }
+    }
+    scrubToTime(time) {
+        this.currentFrame = this.action.getFrameAtTime(time);
+        this.editor.scrubToTime(time);
+        this.timelineNav.scrubToTime(time);
+        console.log('scrubbing to time', time);
+        this.frameNav.setCurrentFrame(this.currentFrame);  
+        this.updateUI(); 
     }
 
     loaded() {

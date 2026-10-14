@@ -1,6 +1,6 @@
 import { Body, Segment, Shape, Path } from "./body.js";
 
-export default class SVGParser{
+export default class SVGParser {
 
     static parseBodySVG(svgStr, name) {
         const body = new Body(name);
@@ -44,7 +44,7 @@ export default class SVGParser{
         });
         return segment;
     }
-    parseTransformMatrixStr(transform) {
+    static parseTransformMatrixStr(transform) {
         const operation = transform.split('(')[0];
         const values = transform.split('(')[1].split(')')[0].split(' ');
         switch (operation) {
@@ -56,32 +56,43 @@ export default class SVGParser{
                 return [1, 0, 0, 1, values[0], values[1]];
         }
     }
-    parseShapeNode(body, shapeEl) {
+    static parseShapeNode(body, shapeEl) {
+        const shape = shapeEl.tagName;
+        if (shape === 'path') {
+            const commands = this.parseCommands(shapeEl.getAttribute('d'));
+            const { minX, minY } = this.getMinXY(commands);
+            const path = new Path(body, this.offsetPath(commands, -minX, -minY), this.parseShapeAttributes(shapeEl));
+            path.offsetX = minX;
+            path.offsetY = minY;
+            return path;
+        }
+        return new Shape(body, shape, this.parseShapeAttributes(shapeEl));
+
+    }
+    static getMinXY(commands) {
+        const minX = commands.reduce((min, cmd) => Math.min(min, cmd.x), Infinity);
+        const minY = commands.reduce((min, cmd) => Math.min(min, cmd.y), Infinity);
+        return { minX, minY };
+    }
+    static parseShapeAttributes(shapeEl) {
         const shape = shapeEl.tagName;
         switch (shape) {
-            case 'path': {
-                const path = new Path(body, this.parseCommands(shapeEl.getAttribute('d')), {});
-                path.offsetX = path.commands.reduce((min, cmd) => Math.min(min, cmd.x), Infinity);
-                path.offsetY = path.commands.reduce((min, cmd) => Math.min(min, cmd.y), Infinity);
-                this.offsetPath(path.commands, -path.offsetX, -path.offsetY);
-
-                return path;
-            }
             case 'circle':
-                return new Shape(body, 'circle', { r: shapeEl.getAttribute('r'), cx: shapeEl.getAttribute('cx'), cy: shapeEl.getAttribute('cy') });
+                return { r: shapeEl.getAttribute('r'), cx: shapeEl.getAttribute('cx'), cy: shapeEl.getAttribute('cy') };
             case 'rect':
-                return new Shape(body, 'rect', { x: shapeEl.getAttribute('x'), y: shapeEl.getAttribute('y'), width: shapeEl.getAttribute('width'), height: shapeEl.getAttribute('height') });
+                return { x: shapeEl.getAttribute('x'), y: shapeEl.getAttribute('y'), width: shapeEl.getAttribute('width'), height: shapeEl.getAttribute('height') };
             case 'ellipse':
-                return new Shape(body, 'ellipse', { rx: shapeEl.getAttribute('rx'), ry: shapeEl.getAttribute('ry'), cx: shapeEl.getAttribute('cx'), cy: shapeEl.getAttribute('cy') });
+                return { rx: shapeEl.getAttribute('rx'), ry: shapeEl.getAttribute('ry'), cx: shapeEl.getAttribute('cx'), cy: shapeEl.getAttribute('cy') };
             case 'line':
-                return new Shape(body, 'line', { x1: shapeEl.getAttribute('x1'), y1: shapeEl.getAttribute('y1'), x2: shapeEl.getAttribute('x2'), y2: shapeEl.getAttribute('y2') });
+                return { x1: shapeEl.getAttribute('x1'), y1: shapeEl.getAttribute('y1'), x2: shapeEl.getAttribute('x2'), y2: shapeEl.getAttribute('y2') };
             case 'polyline':
-                return new Shape(body, 'polyline', { points: shapeEl.getAttribute('points') });
+                return { points: shapeEl.getAttribute('points') };
             case 'polygon':
-                return new Shape(body, 'polygon', { points: shapeEl.getAttribute('points') });
+                return { points: shapeEl.getAttribute('points') };
         }
     }
-    parseCommands(d) {
+
+    static parseCommands(d) {
         // Split the command string into parts based on command letters
         const parts = d.match(/[a-zA-Z][^a-zA-Z]*/g);
         let x = 0, y = 0;
@@ -121,8 +132,8 @@ export default class SVGParser{
     }
 
     // Offsets all points in the path by x and y
-    offsetPath(path, offsetX, offsetY) {
-        path.forEach(cmd => {
+    static offsetPath(commands, offsetX, offsetY) {
+        commands.map(cmd => {
             if (cmd.command === 'M' || cmd.command === 'L') {
                 cmd.x += offsetX;
                 cmd.y += offsetY;
@@ -134,9 +145,10 @@ export default class SVGParser{
                 cmd.x += offsetX;
                 cmd.y += offsetY;
             }
+            return cmd;
         });
     }
-    rotatePath(path, angle) {
+    static rotatePath(path, angle) {
         const cos = Math.cos(angle);
         const sin = Math.sin(angle);
         path.forEach(cmd => {

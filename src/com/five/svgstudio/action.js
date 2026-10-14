@@ -44,10 +44,69 @@ export class Action {
             if (frame.image) {
                 newFrame.image = ImageContext.fromData(frame.image);
             }
+            newFrame.xOffset = frame.xOffset ?? newFrame.xOffset;
+            newFrame.yOffset = frame.yOffset ?? newFrame.yOffset;
             return newFrame;
         });
+        action.recalc();
         return action;
     }
+    /**
+     * 
+     * @param {SVGGElement} svgElement 
+     * @param {string} name 
+     * @param {string} bodyKey 
+     */
+    static fromSVG(svgElement, name, bodyKey) {
+        const actions = [];
+        const rotationElements = svgElement.querySelectorAll('animateTransform[data-action-name][attributeName="transform"][type="rotate"]');
+        //see how many different actions there are
+        const actionNames = Array.from(rotationElements).reduce((acc, rotEl) => {
+            const actionName = rotEl.dataset.actionName;
+            if (actionName && !acc.includes(actionName)) {
+                acc.push(actionName);
+            }
+            return acc;
+        }, []);
+        // go through each action and create an Action object
+        actionNames.forEach(actionName => {
+            const actionRotElements = Array.from(rotationElements).filter(rotEl => rotEl.dataset.actionName === actionName);
+            if (actionRotElements.length > 0) {
+                console.log('found action rotation elements for action', actionName, actionRotElements);
+                const action = new Action(actionName, bodyKey);
+                const keyTimes = [];
+                actionRotElements.forEach(rotEl => {
+                    const frame = new Frame();
+                    const id = rotEl.dataset.segmentId;
+                    const values = rotEl.getAttribute('values').split(';').map(v => parseFloat(v));
+                    //calculate angles between frames
+                    for (let i = 0; i < values.length - 1; i++) {
+                        const angleDiff = values[i + 1] - values[i];
+                        frame.addAngle(id, angleDiff);
+                    }
+                    const dur = parseFloat(rotEl.getAttribute('dur'));
+                    frame.duration = isNaN(dur) ? frame.duration : dur / (values.length - 1);
+                    action.frames.push(frame);
+                    const keyTimesStr = rotEl.getAttribute('keyTimes');
+                    if (keyTimesStr) {
+                        keyTimesStr.split(';').forEach(kt => {
+                            const ktNum = parseFloat(kt);
+                            if (!keyTimes.includes(ktNum)) {
+                                keyTimes.push(ktNum);
+                            }
+                        }); 
+                    }
+                });
+                if (keyTimes.length != action.frames.length + 1) {
+                    console.warn('keyTimes length does not match frames for action', actionName);
+                }
+                action.recalc();
+                actions.push(action);
+            }
+        });       
+        return actions;
+    }
+
     addFrame() {
         this.frames.push(new Frame());
     }
@@ -70,7 +129,7 @@ export class Action {
      * @returns {number} angle
      */
     getAngle(frameIndex, id) {
-        return this.frames.slice(0, frameIndex + 1).reduce((acc, frame) => acc + frame.getAngle(id), 0);
+        return this.frames.slice(0, frameIndex + 1).reduce((acc, frame) => acc + (frame.angles[id]??0), 0);
     }
     /**
      * Get the angle of rotation applying to the object at the given frame index
@@ -82,10 +141,10 @@ export class Action {
         if (this.frames[frameIndex] === undefined) {
             console.warn('no frame at index', frameIndex);
         }
-        else if (this.frames[frameIndex].getAngle(id) === undefined) {
+        else if (this.frames[frameIndex].angles[id] === undefined) {
             console.warn('no angle for id', id, 'at frame index', frameIndex);
         }
-        return this.frames[frameIndex]?.getAngle(id) ?? 0;
+        return this.frames[frameIndex]?.angles[id] ?? 0;
     }
     getFrameAtTime(timeOffset) {
         let accumulatedTime = 0;
@@ -115,6 +174,21 @@ export class Action {
             this.setAngle(frameIndex + 1, id, nextFrameAngle - angleDiff);
         }
     }
+    setFrameOffset(frameIndex, xOffset, yOffset) {
+        this.frames[frameIndex].setOffset(xOffset, yOffset);
+    }
+    setOffset(frameIndex, xOffset, yOffset) {
+
+        this.frames[frameIndex].setOffset(xOffset, yOffset);
+        //add the offset to the next frames to maintain position
+        for (let i = frameIndex + 1; i < this.frames.length; i++) {
+            const currentDeltaX = this.frames[i].xOffset - this.frames[i - 1].xOffset;
+            const currentDeltaY = this.frames[i].yOffset - this.frames[i - 1].yOffset;
+            xOffset += currentDeltaX;
+            yOffset += currentDeltaY;
+            this.frames[i].setOffset(xOffset, yOffset);
+        }
+    }
     addAngle(frameIndex, id, angle) {
         this.frames[frameIndex].addAngle(id, angle);
     }
@@ -130,6 +204,23 @@ export class Action {
     getFrameStartTime(frameIndex) {
         return this.frames.slice(0, frameIndex).reduce((acc, frame) => acc + frame.duration, 0);
     }
+    setFrameStartTime(frameIndex, startTime) {
+        if (frameIndex === 0) {
+            console.warn('cannot set start time of first frame');
+            return;
+        }
+        const currentStartTime = this.getFrameStartTime(frameIndex);
+        const timeDiff = startTime - currentStartTime;
+        if (timeDiff === 0) return;
+        this.frames[frameIndex - 1].duration += timeDiff;
+        this.recalc();
+    }
+    recalc(){
+        this.frames.forEach((f,i)=>{
+            f.startTime = this.getFrameStartTime(i);
+        });
+        this.duration = this.getDuration();
+    }
 
 }
 class Frame {
@@ -138,13 +229,21 @@ class Frame {
      */
     angles = {};
     /**
-     * @type {number
+     * @type {number}
      */
     duration = 0.25; //seconds
     /**
      * @type {ImageContext}
      */
     image = null;
+    /**
+     * @type {number}
+     */
+    xOffset = 0;
+    /**
+     * @type {number}
+     */
+    yOffset = 0;
     /**
      * @param {string} id
      * @param {number} angle
@@ -153,6 +252,14 @@ class Frame {
         console.log('frame setAngle', id, angle);
         this.angles[id] = angle;
     }
+    /** 
+     * @param {number} xOffset
+     * @param {number} yOffset  
+     */
+    setOffset(xOffset, yOffset) {
+        this.xOffset = xOffset;
+        this.yOffset = yOffset;
+    }
     /**
      * @param {string} id
      * @param {number} angle
@@ -160,16 +267,7 @@ class Frame {
     addAngle(id, angle) {
         this.angles[id] = (this.angles[id] ?? 0) + angle;
     }
-    /**
-     * @param {string} id
-     * @returns {number}
-     */
-    getAngle(id) {
-        if (this.angles[id] === undefined) {
-           // console.warn('no angle for id', id);
-        }
-        return this.angles[id] ?? 0;
-    }
+ 
     /**
      * @param {ImageContext} image
      */

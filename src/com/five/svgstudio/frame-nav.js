@@ -1,5 +1,5 @@
 import BaseComponent from "../core/base-component.js";
-import Editor from "./editor.js";
+import FrameEditor from "./frame-editor.js";
 import ImageOverlay from "./image-overlay.js";
 import { ImageContext } from "../core/ui-utils.js";
 import { FrameRenderer } from "./renderer.js";

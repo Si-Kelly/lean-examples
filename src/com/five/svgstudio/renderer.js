@@ -19,27 +19,38 @@ export class FrameRenderer {
 
     playing = false;
 
+    /**
+     * 
+     * @param {SVGGElement} layer 
+     * @param {SVGSVGElement} svgElement 
+     */
     constructor(layer, svgElement) {
         this.svgEl = svgElement;
-        this.layer=layer;   
+        this.layer = layer;
     }
     render(body, actions) {
         this.nodes = [];
         this.body = body;
         this.actions = actions;
-       this.layer.innerHTML = '';
+        this.layer.innerHTML = '';
         if (body) {
-           this.layer.appendChild(this.createGroupElement(body.rootSegment));
+            this.layer.dataset.bodyKey = body.key;
+            this.layer.dataset.bodyName = body.name;
+            this.actions.forEach(action => {
+                this.layer.appendChild(this.createTranslationAnimationNode(action));
+            });
+            const bodyEl = this.createGroupElement(body.rootSegment);
+            this.layer.appendChild(bodyEl);
         }
         this.update();
     }
-    update(action, frame) {
+    update(action, frame, timeOffset) {
+        //  window.requestAnimationFrame((t) => {
         this.body.segments.forEach(segment => {
-            this.updateGroupElement(segment, action, frame);
+            this.updateGroupElement(segment, action, frame, timeOffset);
         });
-    }
-    interpolate(action, timeOffset) {
-    
+        this.updateBodyOffsetAnimation(action);
+        // })
     }
 
     start() {
@@ -70,12 +81,14 @@ export class FrameRenderer {
     }
     createGroupElement(segment) {
         const groupEl = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        groupEl.dataset.segmentId = segment.id;
         if (segment.shape) {
-            groupEl.appendChild(this.createShapeElement(segment.shape, segment.origin));
+            groupEl.appendChild(this.createShapeElement(segment.shape));
         }
         if (this.actions) {
             this.actions.forEach(action => {
-                groupEl.appendChild(this.createAnimationNode(action));
+                groupEl.appendChild(this.createRotateAnimationNode(action));
+
             });
         }
         segment.children.forEach(child => {
@@ -86,7 +99,7 @@ export class FrameRenderer {
         return groupEl;
     }
 
-    createShapeElement(shape, xy) {
+    createShapeElement(shape) {
         const shapeEl = document.createElementNS('http://www.w3.org/2000/svg', shape.name);
         for (const key in shape.attributes) {
             shapeEl.setAttribute(key, shape.attributes[key]);
@@ -95,11 +108,10 @@ export class FrameRenderer {
             const d = SVGUtil.createDString(shape.commands, true);
             shapeEl.setAttribute('d', d);
         }
-        this.#mapDomNode(shape, shapeEl);
         return shapeEl;
     }
 
-    createAnimationNode(action) {
+    createRotateAnimationNode(action) {
         const rotationEl = document.createElementNS('http://www.w3.org/2000/svg', 'animateTransform');
         rotationEl.dataset.actionKey = action.key;
         rotationEl.dataset.actionName = action.name;
@@ -111,14 +123,30 @@ export class FrameRenderer {
         return rotationEl;
     }
 
-    startAnimations(segment = this.body.rootSegment) {
+    createTranslationAnimationNode(action) {
+        const translationEl = document.createElementNS('http://www.w3.org/2000/svg', 'animateTransform');
+        translationEl.dataset.actionKey = action.key;
+        translationEl.dataset.actionName = action.name;
+        translationEl.setAttribute('attributeName', 'transform');
+        translationEl.setAttribute('type', 'translate');
+        translationEl.setAttribute('dur', `${action.getDuration()}s`);
+        translationEl.setAttribute('begin', 'indefinite');
+        translationEl.setAttribute('additive', 'sum');
+        return translationEl;
+    }
+
+    startAnimations() {
+        this.startGroupAnimations(this.body.rootSegment);
+        this.layer.querySelector(':scope >animateTransform').beginElement();
+    }
+    startGroupAnimations(segment) {
         this.playing = true;
         this.update();
         segment.children.forEach(child => {
-            this.startAnimations(child);
+            this.startGroupAnimations(child);
         });
         const domNode = this.getDomNode(segment);
-        const animationElements = domNode.querySelectorAll('animateTransform');
+        const animationElements = domNode.querySelectorAll(':scope > animateTransform');
         animationElements.forEach(animEl => {
             animEl.beginElement();
         });
@@ -126,6 +154,9 @@ export class FrameRenderer {
     stopAnimations(action, frame) {
         this.playing = false;
         this.endAnimations(this.body.rootSegment);
+        const translateAnimation = this.layer.querySelector(':scope >animateTransform');
+        if (translateAnimation)
+            translateAnimation.endElement();
         this.update(action, frame);
     }
 
@@ -139,9 +170,36 @@ export class FrameRenderer {
             animEl.endElement();
         });
     }
+    updateBodyOffsetAnimation(action) {
+        if (action) {
+            const translationEl = this.layer.querySelector(`animateTransform[data-action-key='${action.key}'][type='translate']`);
+            translationEl.setAttribute('values', action.frames.map((_, index) => {
+                const frame = action.frames[index];
+                return `${(-frame.xOffset).toFixed(2)} ${(-frame.yOffset).toFixed(2)}`;
+            }).join(';'));
+            let totalDuration = action.getDuration();
+            //last frame must start at 1, so we reduce the total length accordingly
+            totalDuration -= action.frames[action.frames.length - 1].duration;
+            translationEl.setAttribute('keyTimes', action.frames.map((_, index) => {
+                return (action.getFrameStartTime(index) / totalDuration).toFixed(2);
+            }).join(';'));
+        }
+    }
+    /**
+     * 
+     * @param {Segment} segment 
+     * @param {Action} action 
+     * @param {number} frameIndex 
+     * @param {number} timeOffset 
+     */
     updateGroupElement(segment, action, frameIndex, timeOffset) {
         const node = this.getDomNode(segment);
         node.style.transformOrigin = `${this.px(segment.pivotPoint.x)} ${this.px(segment.pivotPoint.y)}`;
+        node.dataset.pivotPointX = `${segment.pivotPoint.x.toFixed(2)}`;
+        node.dataset.pivotPointY = `${segment.pivotPoint.y.toFixed(2)}`;
+        node.dataset.originX = `${segment.origin.x.toFixed(2)}`;
+        node.dataset.originY = `${segment.origin.y.toFixed(2)}`;
+        node.dataset.rotation = segment.rotation.toFixed(2);
 
         if (this.playing) {
             node.setAttribute('transform', SVGUtil.getTranslationMatrix(segment.origin));
@@ -152,11 +210,7 @@ export class FrameRenderer {
             const frame = action.frames[frameIndex];
             let angle = action.getAngle(frameIndex, segment.id);
             let angleNext = action.getAngle(Math.min(frameIndex + 1, action.frames.length - 1), segment.id);
-            let accumulatedTime = 0;
-            for (let i = 0; i < frameIndex; i++) {
-                accumulatedTime += action.frames[i].duration;
-            }
-            angle = AnimationUtil.lerp(angle, angleNext, AnimationUtil.clamp((timeOffset - accumulatedTime) / frame.duration, 0, 1));
+            angle = AnimationUtil.lerpA(angle, angleNext, AnimationUtil.clamp((timeOffset - frame.startTime) / frame.duration, 0, 1));
             node.setAttribute('transform', SVGUtil.getTransformMatrix(angle, segment.origin));
             node.style.transform = null;
         }
@@ -164,10 +218,12 @@ export class FrameRenderer {
             const angle = action.getAngle(frameIndex, segment.id);
             node.setAttribute('transform', SVGUtil.getTransformMatrix(angle, segment.origin));
             node.style.transform = null;
-        } 
+        }
         else {
-            node.style.transform = `translate(${this.px(segment.origin.x)}, ${this.px(segment.origin.y)})`;
-            node.setAttribute('transform', '');
+            // node.style.transform = `translate(${this.px(segment.origin.x)}, ${this.px(segment.origin.y)})`;
+            // node.setAttribute('transform', '');
+            node.setAttribute('transform', SVGUtil.getTranslationMatrix(segment.origin));
+            node.style.transform = null;
         }
         segment.children.forEach(child => {
             this.updateGroupElement(child, action, frameIndex, timeOffset);
@@ -193,14 +249,14 @@ export class FrameRenderer {
      * @param {Action} action 
      */
     updateAnimationNode(segment, action) {
-        const rotationEl = this.getDomNode(segment).querySelector(`animateTransform[data-action-key='${action.key}']`);
+        const rotationEl = this.getDomNode(segment).querySelector(`animateTransform[data-action-key='${action.key}'][type='rotate']`);
         rotationEl.setAttribute('values', action.frames.map((_, index) => {
             const angleDegrees = SVGUtil.toDegrees(action.getAngle(index, segment.id));
             return `${angleDegrees.toFixed(2)}`;
         }).join(';'));
         let totalDuration = action.getDuration();
         //last frame must start at 1, so we reduce the total length accordingly
-        totalDuration-= action.frames[action.frames.length - 1].duration;
+        totalDuration -= action.frames[action.frames.length - 1].duration;
         rotationEl.setAttribute('keyTimes', action.frames.map((_, index) => {
             return (action.getFrameStartTime(index) / totalDuration).toFixed(2);
         }).join(';'));

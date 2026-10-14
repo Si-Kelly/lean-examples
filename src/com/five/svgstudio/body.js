@@ -1,10 +1,11 @@
 import { XY } from '../core/ui-utils.js';
 import { Assets } from './assets.js';
+import SVGParser from './parser.js';
 /**
 * @description Class representing a body that can be animated. The body is split into a tree of segments that can each be rotated around a pivot point.
 */
 export class Body {
-    
+
     /**
      * @type {Segment|null}
      * @description Represents the root segment of the SVG body. It is initially set to null.
@@ -13,11 +14,31 @@ export class Body {
     nextId = 0;
     key;
     type = 'Model';
+    /**
+     * @type {string}
+     */
+    filename;
 
-    constructor(name, key = Assets.generateKey()) {
+    constructor(name, key = Assets.generateKey(), filename) {
         console.log('loading body id=', key);
         this.key = key;
         this.name = name;
+        this.filename = filename;
+    }
+    /**
+     * 
+     * @param {SVGGElement} svgElement 
+     */
+    static fromSVG(svgElement, filename) {
+        //parse the svg element into segments and shapes
+        const name = svgElement.dataset.bodyName;
+        const key = svgElement.dataset.bodyKey;
+        const body = new Body(name, key, filename);
+        const rootEl = svgElement.querySelector('g');
+        const rootSegment = Segment.fromSVG(body, rootEl);
+        body.rootSegment = rootSegment;
+        return body;
+
     }
     static fromData(data) {
         const body = new Body(data.name, data.key);
@@ -48,10 +69,13 @@ export class Body {
 export class Segment {
     shape = null;
     origin = XY.of({ x: 0, y: 0 });
+    /**
+     * @type {XY}
+     */
     pivotPoint = XY.of({ x: 0, y: 0 });
     children = [];
 
-    constructor(body, shape, pivotPoint, origin, rotation,id) {
+    constructor(body, shape, pivotPoint, origin, rotation, id) {
         this.origin = XY.of(origin);
         this.pivotPoint = XY.of(pivotPoint);
         this.rotation = rotation;
@@ -65,6 +89,28 @@ export class Segment {
         const children = data.children.map(child => Segment.fromData(body, child));
         children.forEach(child => {
             segment.addChild(child);
+        });
+        return segment;
+    }
+    static fromSVG(body, svgElement) {
+        //parse the svg element into a segment
+        const shapeTypes = ['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon'];
+        const query = shapeTypes.map(type => `:scope > ${type}`).join(', ');
+        const shapeEl = svgElement.querySelector(query);
+        let shape = null;
+        if (shapeEl) {
+            shape = Shape.fromSVG(body, shapeEl);
+        }
+        const pivotX = parseFloat(svgElement.getAttribute('data-pivot-point-x')) || 0;
+        const pivotY = parseFloat(svgElement.getAttribute('data-pivot-point-y')) || 0;
+        const originX = parseFloat(svgElement.getAttribute('data-origin-x')) || 0;
+        const originY = parseFloat(svgElement.getAttribute('data-origin-y')) || 0;
+        const rotation = parseFloat(svgElement.getAttribute('data-rotation')) || 0;
+        const segment = new Segment(body, shape, { x: pivotX, y: pivotY }, { x: originX, y: originY }, rotation, svgElement.dataset.segmentId);
+        const children = svgElement.querySelectorAll(':scope > g');
+        children.forEach(childEl => {
+            const childSegment = Segment.fromSVG(body, childEl);
+            segment.addChild(childSegment);
         });
         return segment;
     }
@@ -105,14 +151,23 @@ export class Shape {
         }
         return new Shape(body, data.name, data.attributes, data.id);
     }
+    static fromSVG(body, svgElement) {
+        //parse the svg element into a shape
+        const name = svgElement.tagName;
+        if (name === 'path') {
+            return Path.fromSVG(body, svgElement);
+        }
+        const attributes = SVGParser.parseShapeAttributes(svgElement);
+        return new Shape(body, name, attributes, svgElement.dataset.shapeId);
+    }
 
     getAttribute(key) {
         return this.attributes[key];
     }
 }
 export class Path extends Shape {
-    constructor(body, commands, attributes) {
-        super(body, 'path', attributes);
+    constructor(body, commands, attributes, id) {
+        super(body, 'path', attributes, id);
         this.commands = commands;
     }
 
@@ -124,6 +179,11 @@ export class Path extends Shape {
      * @returns {Path} A new Path instance.
      */
     static fromData(body, data) {
-        return new Path(body, data.commands, data.attributes);
+        return new Path(body, data.commands, data.attributes, data.id);
+    }
+    static fromSVG(body, svgElement) {
+        const d = svgElement.getAttribute('d');
+        const commands = SVGParser.parseCommands(d);
+        return new Path(body, commands, {}, svgElement.dataset.shapeId);
     }
 }

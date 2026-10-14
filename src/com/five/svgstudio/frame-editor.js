@@ -1,9 +1,9 @@
 import BaseComponent from "../core/base-component.js";
-import { SVGUtil, Drag, XY } from '../core/ui-utils.js';
+import { SVGUtil, AnimationUtil, Drag, XY } from '../core/ui-utils.js';
 import { FrameRenderer } from "./renderer.js";
 const DESIGN = 0, ANIMATE = 1, PLAY = 2, VIEW = 3;
 const FPS = 5;
-export default class Editor extends BaseComponent {
+export default class FrameEditor extends BaseComponent {
     /**
      * @type {Body}
      * @description the current model being edited.
@@ -36,6 +36,53 @@ export default class Editor extends BaseComponent {
      */
     additiveMode = true;
 
+    /**
+     * @type {number}
+     * @description the current frame index.
+     */
+    frame = 0;
+    /**
+     * @type {Drag}
+     */
+    drag = null;
+    /**
+     * @type {number}
+     */
+    viewportWidth = 1000;
+    /**
+     * @type {number}
+     */
+    viewportHeight = 500;
+    /**
+     * @type {number}
+     */
+    viewportWidth0 = 1000;
+    /**
+     * @type {number}
+     */
+    viewportHeight0 = 500;
+    /**
+     * @type {number}
+     */
+    viewportXOffset = 0;
+    /**
+     * @type {number}
+     */
+    viewportYOffset = 0;
+    /**
+     * @type {number}
+     */
+    gridWidth = 6000;
+    /**
+     * @type {number}
+     */
+    gridHeight = 3000;
+
+    /**
+     * @type {number}
+     */
+    currentZoomFactor = 1;
+
     constructor() {
         super(/*html*/`
             <style>
@@ -47,7 +94,6 @@ export default class Editor extends BaseComponent {
                 svg {
                     width: 100%;
                     height: 100%;
-                   
                 }
                 svg:not(:root) {
                     overflow: visible;
@@ -79,11 +125,19 @@ export default class Editor extends BaseComponent {
                     .grid-lines{
                         stroke: #ccc;
                         stroke-width: 0.5;
+                        vector-effect: non-scaling-stroke;
                         fill:none;
                     }
                     .centre-lines{
+                        vector-effect: non-scaling-stroke;
                         stroke: #888;
                         stroke-width: 1;
+                    }
+                    &.pan-indicator-additive .grid-lines{
+                        stroke: red;
+                    }
+                    &.pan-indicator .grid-lines{
+                        stroke: green;
                     }
                 }
                
@@ -101,7 +155,6 @@ export default class Editor extends BaseComponent {
     connectedCallback() {
         this.svgUtil = new SVGUtil(this.svgEl);
         this.renderer = new FrameRenderer(this.bodyEl, this.svgEl);
-        this.createGridBackground();
 
         this.shadowRoot.addEventListener('mousemove', (e) => {
             if (this.drag) {
@@ -110,6 +163,12 @@ export default class Editor extends BaseComponent {
                     new XY(e.offsetX, e.offsetY);
                 this.drag.nextXY(this.svgUtil.getSVGXY(xy));
                 e.preventDefault();
+            } else if (e.shiftKey) {
+                this.shiftPressed = true;
+                this.updateUI();
+            } else if (this.shiftPressed) {
+                this.shiftPressed = false;
+                this.updateUI();
             }
         });
         this.shadowRoot.addEventListener('mouseup', (e) => {
@@ -120,6 +179,24 @@ export default class Editor extends BaseComponent {
                 e.preventDefault();
             } else {
                 this.clearSelection();
+            }
+        });
+        //add wheelmouse listener for zooming
+        this.svgEl.addEventListener('wheel', (e) => {
+            if (e.deltaY != 0) {
+                const zoomFactor = Math.exp(e.deltaY * 0.001);
+                const mouseSVGXY = this.svgUtil.getSVGXY(new XY(e.offsetX, e.offsetY));
+                this.zoom(mouseSVGXY, zoomFactor);
+
+                e.preventDefault();
+            }
+        });
+
+        document.addEventListener('keydown', this.keyDownListener = (e) => {
+            if (e.key === ' ') {
+                this.spacePressed = true;
+                this.updateUI();
+                e.preventDefault();
             }
         });
         document.addEventListener('keyup', this.keyUpListener = (e) => {
@@ -136,6 +213,22 @@ export default class Editor extends BaseComponent {
             if (e.key == 'ArrowDown' && this.mode == ANIMATE) {
                 this.selectChildSegment();
             }
+            if (e.key === ' ') {
+                this.spacePressed = false;
+                this.updateUI();
+                e.preventDefault();
+            }
+        });
+        this.svgEl.addEventListener('mousedown', (e) => {
+            if (this.mode != DESIGN && this.mode != ANIMATE) return;
+            e.stopPropagation();
+            e.preventDefault();
+            //if middle mouse button or space key is held down
+            if (e.button === 1 || e.buttons === 4 || this.spacePressed) {
+                this.beginPanViewport();
+            } else if (e.shiftKey) {
+                this.beginMoveGrid();
+            }
         });
         this.pivotPointEl = this.createPivotPointEl();
         this.svgEl.append(this.pivotPointEl);
@@ -144,45 +237,135 @@ export default class Editor extends BaseComponent {
         //clean up event listeners
         document.removeEventListener('keyup', this.keyUpListener);
     }
-    createGridBackground() {
-        const gridSize = 50;
-        const pattern = document.createElementNS('http://www.w3.org/2000/svg', 'pattern');
-        pattern.setAttribute('id', 'gridPattern');
-        pattern.setAttribute('width', gridSize);
-        pattern.setAttribute('height', gridSize);
-        pattern.setAttribute('patternUnits', 'userSpaceOnUse');
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', `M ${gridSize} 0 L 0 0 0 ${gridSize}`);
-        path.classList.add('grid-lines');
-        pattern.appendChild(path);
-        const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-        defs.appendChild(pattern);
-        this.gridEl.appendChild(defs);
-        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        rect.setAttribute('width', '100%');
-        rect.setAttribute('height', '100%');
-        rect.setAttribute('fill', 'url(#gridPattern)');
-        this.gridEl.appendChild(rect);
-        //add centre lines
-        const centreLines = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        centreLines.setAttribute('d', `M ${this.svgEl.getAttribute('width') / 2} 0 L ${this.svgEl.getAttribute('width') / 2} ${this.svgEl.getAttribute('height')} M 0 ${ 2 * this.svgEl.getAttribute('height') / 3} L ${this.svgEl.getAttribute('width')} ${2 * this.svgEl.getAttribute('height') / 3}`);
-        centreLines.setAttribute('class', 'centre-lines');
-        this.gridEl.addEventListener('mousedown', (e) => {
-            e.stopPropagation();
-            this.startMoveGrid();
-        });
-        this.gridEl.appendChild(centreLines);
+    //UPDATES TO DOM
+    updateUI() {
+        this.svgEl.setAttribute('viewBox', `0 0 ${this.viewportWidth} ${this.viewportHeight}`);
+        this.svgEl.classList.toggle('locked', !(this.mode == DESIGN || this.mode == ANIMATE));
+
+        if (!this.body) return;
+        this.updatePivotPoint(this.selectedSegment);
+        this.svgEl.setAttribute('viewBox', `${this.viewportXOffset} ${this.viewportYOffset} ${this.viewportWidth} ${this.viewportHeight}`);
+        //update grid position
+        this.redrawGrid();
+        this.gridEl.style.visibility = (this.mode == DESIGN || this.mode == ANIMATE) ? 'visible' : 'hidden';
+        this.style.cursor = this.drag?.type === 'pan-viewport' || this.drag?.type === 'pan-grid' ? 'grabbing'
+            : this.drag?.type === 'move-segment' || this.drag?.type === 'move-pivot-point' ? 'move'
+                : this.drag?.type === 'rotate-segment' ? 'rotate'
+                    : this.mode == ANIMATE && (this.spacePressed || this.shiftPressed) ? 'grab' : 'default';
+        this.gridEl.classList.toggle('pan-indicator-additive', this.mode == ANIMATE && this.shiftPressed == true && this.additiveMode == true);
+        this.gridEl.classList.toggle('pan-indicator', this.mode == ANIMATE && this.shiftPressed == true && !this.additiveMode);
     }
-    startMoveGrid() {
+    getFrameOffset() {
+        let frameGridXOffset = 0;
+        let frameGridYOffset = 0;
+        if (this.action && this.frame != null) {
+            const frame = this.action.frames[this.frame];
+            if (this.timeOffset != null) {//when scrubbing
+                let x0 = frame.xOffset;
+                let x1 = this.action.frames[Math.min(this.frame + 1, this.action.frames.length - 1)].xOffset;
+                frameGridXOffset = AnimationUtil.lerp(x0, x1, AnimationUtil.clamp((this.timeOffset - frame.startTime) / frame.duration, 0, 1));
+                let y0 = frame.yOffset;
+                let y1 = this.action.frames[Math.min(this.frame + 1, this.action.frames.length - 1)].yOffset;
+                frameGridYOffset = AnimationUtil.lerp(y0, y1, AnimationUtil.clamp((this.timeOffset - frame.startTime) / frame.duration, 0, 1));
+            } else {
+                frameGridXOffset = (frame.xOffset ?? 0);
+                frameGridYOffset = (frame.yOffset ?? 0);
+            }
+        }
+        return { frameGridXOffset, frameGridYOffset };
+    }
+    redrawGrid() {
+
+        const gridDef = [{
+            spacing: 100,
+            strokeWidth: 0.5,
+            stroke: '#ccc'
+        },
+        {
+            spacing: 500,
+            strokeWidth: 1,
+            stroke: '#888'
+        },
+        {
+            spacing: 1000,
+            strokeWidth: 1.5,
+            stroke: '#555'
+        }];
+        this.gridEl.innerHTML = '';
+        const { frameGridXOffset, frameGridYOffset } = this.getFrameOffset();
+        const gridYOffset = this.viewportYOffset + frameGridYOffset;
+        const gridXOffset = this.viewportXOffset + frameGridXOffset;
+
+        gridDef.forEach(def => {
+            const vlineX = gridXOffset - (this.viewportXOffset % def.spacing) - 2 * def.spacing;
+            const hlineY = gridYOffset - (this.viewportYOffset % def.spacing) - 2 * def.spacing;
+            //vertical lines
+            for (let x = vlineX; x < vlineX + this.viewportWidth + 3 * def.spacing; x += def.spacing) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', this.px(x));
+                line.setAttribute('y1', this.px(-800000));
+                line.setAttribute('x2', this.px(x));
+                line.setAttribute('y2', this.px(800000));
+                line.classList.add('grid-lines');
+                line.setAttribute('stroke-width', def.strokeWidth.toString());
+                line.setAttribute('stroke', def.stroke);
+                this.gridEl.appendChild(line);
+            }
+            //horizontal lines
+            for (let y = hlineY; y < hlineY + this.viewportHeight + 3 * def.spacing; y += def.spacing) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', this.px(-800000));
+                line.setAttribute('y1', this.px(y));
+                line.setAttribute('x2', this.px(800000));
+                line.setAttribute('y2', this.px(y));
+                line.classList.add('grid-lines');
+                line.setAttribute('stroke-width', def.strokeWidth.toString());
+                line.setAttribute('stroke', def.stroke);
+                this.gridEl.appendChild(line);
+            }
+        });
+    }
+
+    beginMoveGrid() {
         this.drag = new Drag({
             next: (dxy) => {
-                this.gridOffsetX = (this.gridOffsetX ?? 0) + dxy.x;
-                this.gridOffsetY = (this.gridOffsetY ?? 0) + dxy.y;
+                if (this.action) {
+                    const newXOffset = (this.action.frames[this.frame].xOffset ?? 0) + dxy.x * this.currentZoomFactor;
+                    const newYOffset = (this.action.frames[this.frame].yOffset ?? 0) + dxy.y * this.currentZoomFactor;
+                    if (this.additiveMode)
+                        this.action.setOffset(this.frame, newXOffset, newYOffset);
+                    else
+                        this.action.setFrameOffset(this.frame, newXOffset, newYOffset);
+                }
+                this.renderer.update(this.action, this.frame);
                 this.updateUI();
             },
             done: (dxy) => {
             }
-        });
+        }, 'pan-grid');
+    }
+    beginPanViewport() {
+        this.drag = new Drag({
+            next: (dxy) => {
+                this.svgEl.classList.add('panning');
+                this.viewportXOffset -= dxy.x * this.currentZoomFactor;
+                this.viewportYOffset -= dxy.y * this.currentZoomFactor;
+                this.updateUI();
+            },
+            done: (dxy) => {
+                this.svgEl.classList.remove('panning');
+            }
+        }, 'pan-viewport');
+    }
+    zoom(mouseSVGXY, zoomFactor) {
+        this.currentZoomFactor *= zoomFactor;
+        const newViewportWidth = this.viewportWidth0 * this.currentZoomFactor;
+        const newViewportHeight = this.viewportHeight0 * this.currentZoomFactor;
+        this.viewportXOffset = mouseSVGXY.x - (mouseSVGXY.x - this.viewportXOffset) * (newViewportWidth / this.viewportWidth);
+        this.viewportYOffset = mouseSVGXY.y - (mouseSVGXY.y - this.viewportYOffset) * (newViewportHeight / this.viewportHeight);
+        this.viewportWidth = newViewportWidth;
+        this.viewportHeight = newViewportHeight;
+        this.updateUI();
     }
     addGroupListeners(segment) {
         const groupEl = this.renderer.getDomNode(segment);
@@ -219,27 +402,16 @@ export default class Editor extends BaseComponent {
         return circle;
     }
 
-
-    //UPDATES TO DOM
-    updateUI() {
-        this.svgEl.classList.toggle('locked', !(this.mode == DESIGN || this.mode == ANIMATE));
-
-        if (!this.body) return;
-        this.updatePivotPoint(this.selectedSegment);
-        // if(this.gridOffsetX!=undefined || this.gridOffsetY!=undefined){
-        //     this.gridEl.style.transform = `translate(${this.px(this.gridOffsetX??0)}, ${this.px(this.gridOffsetY??0)})`;
-        // } else {
-        //     this.gridEl.style.transform = '';
-        // }
-    }
-
     updatePivotPoint(segment) {
+        //move pivot point into segment group
         this.pivotPointEl.style.display = segment ? '' : 'none';
         if (!segment) return;
-        const circle = this.pivotPointEl;
-        const xy = this.renderer.getViewXY(segment.pivotPoint, segment);
-        circle.setAttribute('cx', xy.x.toFixed(2));
-        circle.setAttribute('cy', xy.y.toFixed(2));
+
+        const segmentNode = this.renderer.getDomNode(segment);
+        this.pivotPointEl.remove();
+        segmentNode.appendChild(this.pivotPointEl);
+        this.pivotPointEl.setAttribute('cx', this.px(segment.pivotPoint.x));
+        this.pivotPointEl.setAttribute('cy', this.px(segment.pivotPoint.y));
     }
     fireBodyUpdated() {
         this.fireEvent('bodyUpdated', this.body);
@@ -289,7 +461,7 @@ export default class Editor extends BaseComponent {
                 this.renderer.update(this.action, this.frame);
                 this.updateUI();
             }
-        });
+        }, 'move-segment');
     }
     beginMovePivotPoint(segment) {
         this.drag = new Drag({
@@ -303,7 +475,7 @@ export default class Editor extends BaseComponent {
                 this.renderer.update(this.action, this.frame);
                 this.updateUI();
             }
-        });
+        }, 'move-pivot-point');
     }
     beginRotateSegment(segment) {
         let startAngle;
@@ -316,7 +488,7 @@ export default class Editor extends BaseComponent {
                     startAngle = angle;
                 }
                 const rotation = startAngle - angle;
-                if(!this.additiveMode){
+                if (!this.additiveMode) {
                     this.action.setFrameAngle(this.frame, segment.id, initialRotation + rotation);
                 } else {
                     this.action.setAngle(this.frame, segment.id, initialRotation + rotation);
@@ -329,7 +501,7 @@ export default class Editor extends BaseComponent {
                 this.renderer.update(this.action, this.frame);
                 this.updateUI();
             }
-        });
+        }, 'rotate-segment');
     }
     setModeAnimate() {
         this.mode = ANIMATE;
@@ -352,15 +524,23 @@ export default class Editor extends BaseComponent {
         this.mode = VIEW;
         this.updateUI();
     }
-
-
     setCurrentFrame(frame) {
         this.frame = frame;
+        this.timeOffset = null;
         this.renderer.update(this.action, this.frame);
         this.updateUI();
     }
+    scrubToTime(timeOffset) {
+        if (!this.action) return;
+        const frameIndex = this.action.getFrameAtTime(timeOffset);
+        this.frame = frameIndex;
+        this.timeOffset = timeOffset;
+        this.renderer.stopAnimations(this.action, this.frame);
+        this.renderer.update(this.action, this.frame, timeOffset);
+        this.updateUI();
+    }
+
     /**
-     * 
      * @param {Action} action
      * @returns 
      */
@@ -376,7 +556,7 @@ export default class Editor extends BaseComponent {
     }
     setBody(body) {
         this.body = body;
-        this.renderer.render(this.body, this.action?[this.action]:[]);
+        this.renderer.render(this.body, this.action ? [this.action] : []);
         this.body.segments.forEach(segment => {
             this.addGroupListeners(segment);
         });
@@ -400,13 +580,13 @@ export default class Editor extends BaseComponent {
             this.fireEvent('selectionChanged');
         }
     }
-        /**
-     * @param {number} val 
-     * @returns 
-     */
+    /**
+ * @param {number} val 
+ * @returns 
+ */
     px(val) {
         return `${val.toFixed(2)}px`;
     }
 
 }
-customElements.define('frame-editor', Editor);
+customElements.define('frame-editor', FrameEditor);
